@@ -1,0 +1,9 @@
+% bibentry template for lsst.bib in https://github.com/lsst/lsst-texmf/blob/master/texmf/bibtex/bib/lsst.bib
+
+@DocuShare{DMTN-196,
+   author = { Jim Bosch },
+    title = {Practical, nearly-proper image subtraction, yet again},
+     year = 2021,
+    month = Jun,
+   handle = {DMTN-196},
+      url = {https://dmtn-196.lsst.io } }
