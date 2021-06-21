@@ -72,7 +72,7 @@ Applying preconvolution rigorously requires accounting for noise correlations wh
 
 \citeds{DMTN-179} provides a thorough overview of the relationship between \ZOGY{} and \AL{} and their practical failure modes, including derivations that are \emph{extremely} similar to those in the next section, without (as far as I can tell) directly considering this algorithm or evaluating its feasibility.
 
-\section{Algorithm}
+\section{Algorithm I: optimistic deconvolution}
 
 Our target is a simplified version of the \ZOGY{} formula for a proper (decorrelated, non-score) difference image in the Fourier domain (their eq. 13):
 
@@ -98,7 +98,7 @@ where
 We have combined the PSFs and photometric calibration terms both for notational simplify and to reflect the fact that we may want to solve for the photometric scaling of the science image.
 Once can equivalently assume instead that either or both images are already in the desired flux units and $\phi$ is already normalized to integrate to unity; this will generally be true for the template in practice.
 
-We now introduce analytic approximations $P_T(x)$ and $P_S(x)$ to the true template and science image PSFs $\phi_T(x)$ and $\phi_S$; these could be (e.g.) Gaussian or double-Gaussian profiles of approximately the same shapes.
+We will also use analytic approximations $P_T(x)$ and $P_S(x)$ to the true template and science image PSFs $\phi_T(x)$ and $\phi_S$; these could be (e.g.) Gaussian or double-Gaussian profiles of approximately the same shapes.
 We will derive other requirements on the nature of these approximations as we go.
 
 The Fourier difference image is unchanged if we multiply both the numerator and denominator by $\widetilde{P_T}/\widetilde{\phi_T}$:
@@ -146,8 +146,8 @@ This approximation does not affect the quality of the subtraction, as it amounts
 
 We now identify the two Fourier products for the two images as distinct kernels, and consider the subtraction in the image-domain:
 \begin{align}
-  \widetilde{z_D}(k) & \approx \widetilde{V}(k) \, \widetilde{z_S}
-    - \widetilde{K}(k) \, \widetilde{z_T} \\
+  \widetilde{z_D}(k) & \approx \widetilde{V}(k) \, \widetilde{z_S}(k)
+    - \widetilde{K}(k) \, \widetilde{z_T}(k) \\
   \widetilde{V}(k) & \equiv \frac{
     \widetilde{P_T}(k)
   }{
@@ -178,47 +178,27 @@ $K$ is a difference kernel that we can now solve for via least squares, just as 
 
 When the approximate PSFs are good, the residual image has nearly uncorrelated noise and hence we can consider each \emph{residual} pixel an independent data point in our optimization.
 
-For this algorithm to be practical, we need to be able to define $P_T$ and $P_S$ such that $V$ and $K$ are net convolutions, while still making them close enough to the true (and unknown) $\phi_T$ and $\phi_S$ to make ignoring correlations in [\ref{eqn:least-squares}] acceptable.
-
-As long as our PSF approximations $P_T$ and $P_S$ are monotonically decreasing in Fourier space (using Gaussians clearly satisfies this), then $\widetilde{V}$ also monotonically decreasing and a net convolution by construction, regardless of the noise or the relative scales of the PSF approximations (and the true PSFs do not enter at all), because the denominator of [\ref{eqn:preconvolution-kernel}] cannot have zeros except where the numerator does.
-
-Unfortunately, the same is not true of $K$.
-For further insight, we can decompose $\widetilde{K}$ into the product of the true PSF Fourier ratio $\widetilde{R} = \widetilde{\phi_S}/\widetilde{\phi_T}$ and $\widetilde{V}$:
+The PSF of the resulting difference image is proportional to the Fourier transform of:
 \begin{align}
-  \widetilde{K}(k) & = \frac{
-    \widetilde{P_T}(k)
-  }{
-    \sqrt{
-      \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
-      + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
-    }
-  }
-  \;
-  \frac{\widetilde{\phi_S}(k)}{\widetilde{\phi_T}(k)}
-  = \widetilde{V}(k) \, \widetilde{R}(k) \; .
+  \widetilde{\phi_D}(k) &= \frac{
+      \widetilde{P_T}(k) \, \widetilde{\phi_S}(k)
+    }{
+      \sqrt{
+          \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
+          + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
+      }
+    }\label{eqn:target-psf}
 \end{align}
-In the limit where the template PSF is smaller than the science image PSF, or more precisely,
-\begin{align}
-  \text{supp}\,\widetilde{\phi_S}(k) \in \text{supp}\,\widetilde{\phi_T}(k) \; ,
-\end{align}
-then $R$ and $V$ are both net convolutions and our algorithm is safe.
 
-When this is not the case, we need to choose $P_S$ and $P_T$ to satisfy
-\begin{align}
-  \text{supp}\,\widetilde{\phi_S}(k)\,\widetilde{P_T}(k)
-  \in \text{supp}\,\widetilde{\phi_T}(k) \, \sqrt{
-    \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
-    + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
-  } \; .
-\end{align}
-We cannot expand the right-hand side if it is already limited by the lack of high-frequency $k$ modes in the template PSF, but we can shrink the left-hand side to fit, by making $P_T$ broader and hence its support in $k$ smaller.
+When the template has no noise at all, $V(x) \rightarrow \delta(x)$ regardless of our choices for the approximate PSFs, and this algorithm reduces to \AL{}, as expected.
+But this reveals a flaw: as in \AL{}, the difference kernel $K$ we fit for is a net deconvolution when the science image is sharper than the template.
+In fact, in the general case, when there is noise in both images and the PSFs are not the same, one of $V$ or $K$ is \emph{always} a net deconvolution, because the target PSF [\ref{eqn:target-psf}] that we convolve both sides to is an average\footnote{It isn't a standard average -- it's got elements of both RMS and geometric means to it, in the Fourier domain -- but it is indeed an average.} of the science and template PSFs, and hence it is always sharper than one of them.
 
-Put another way: we should try to make our initial $P_T$ a bit larger than the true template PSF $\phi_T$.
-If $K$ gets dangerously close to a deconvolution in any direction as we iterate, we can make $P_T$ broader (actually just broadening $V$ / smoothing $V z_S$) to stabilize the algorithm.
-
-The algorithm's stability has no similarly direct dependence on $P_S$, but the quality of that approximation does play a role in decorrelating the noise, and it is important that it be monotonically decreasing and noise-free in the Fourier domain to guarantee that $V$ is a convolution.
-Picking a form and parameters for $P_S$ that make the construction of $V$ and $V \ast z_S$ efficient for a width-parameterized $P_T$ may be useful, in order to provide a way to easily increase $V$ as needed in the directions that most help with stability.
-
+This may not be a problem in practice when the template image is sharper, because this makes $K$ a net convolution and $V$ a net deconvolution, and $V$ can be defined to be analytic and hence a completely reversible deconvolution.
+It probably is a problem when the science image is sharper, because this makes $K$ a net deconvolution; $K$ is something we fit from the data, and is hence noisy in general.
+Deconvolution is less of a convolution than in the vanilla \AL{} method, because $V$ is a net convolution and this reduces the amount of deconvolution required of $K$.
+In addition, the residual image that we optimize should be much closer to uncorrelated than the one used in vanilla \AL{}, which may improve convergence and reduce biases in the fit for $K$.
+So, given that \AL{} methods have been shown to work when only a small deconvolution is required, this algorithm may still be worth a try, because it does mitigate the deconvolution problem, even if it does not solve it.
 
 
 \appendix
