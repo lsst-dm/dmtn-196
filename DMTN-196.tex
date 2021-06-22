@@ -10,6 +10,8 @@
 \newcommand{\ZOGY}{\citetalias{2016ApJ...830...27Z}}
 \newcommand{\AL}{\citetalias{1998ApJ...503..325A}}
 
+\DeclareMathOperator{\sinc}{sinc}
+
 %If you want glossaries
 %\input{aglossary.tex}
 %\makeglossaries
@@ -72,9 +74,9 @@ Applying preconvolution rigorously requires accounting for noise correlations wh
 
 \citeds{DMTN-179} provides a thorough overview of the relationship between \ZOGY{} and \AL{} and their practical failure modes, including derivations that are \emph{extremely} similar to those in the next section, without (as far as I can tell) directly considering this algorithm or evaluating its feasibility.
 
-\section{Algorithm I: optimistic deconvolution}
+\section{Algorithmic Framework}
 
-Our target is a simplified version of the \ZOGY{} formula for a proper (decorrelated, non-score) difference image in the Fourier domain (their eq. 13):
+The difference image we want to produce (or at least approximate) is a simplified version of the \ZOGY{} formula for a proper (decorrelated, non-score) difference image in the Fourier domain (their eq. 13):
 
 \begin{align}
   \widetilde{z_D}(k) & = \frac{
@@ -86,10 +88,15 @@ Our target is a simplified version of the \ZOGY{} formula for a proper (decorrel
       + \sigma_T^2 \, \left|\widetilde{\phi_S}(k)\right|^2
     }
   }
+  \label{eqn:zogy-diffim}
 \end{align}
 where
 \begin{itemize}
-  \item $\widetilde{f}(k)$ represents the Fourier transform of $f(x)$;
+  \item $\widetilde{f}(k)$ represents the Fourier transform of $f(x)$, defined here with its inverse as
+  \begin{align}
+    \widetilde{f}(k) &= \int_{-\infty}^{\infty} dx \, e^{-2\pi i \, k \cdot x} \, f(x) \\
+    f(x) &= \int_{-\infty}^{\infty} dk \, e^{2\pi i \, k \cdot x} \, \widetilde{f}(k)
+  \end{align}
   \item $z_T(x)$ and $z_S(x)$ are the template and science images, respectively;
   \item $\phi_T(x)$ and $\phi_S(x)$ are their true (unknown) PSFs and photometric calibration factors (assumed spatially constant for now);
   \item $\sigma_T$ and $\sigma_S$ are their per-pixel noise levels (assumed spatially constant);
@@ -98,64 +105,72 @@ where
 We have combined the PSFs and photometric calibration terms both for notational simplify and to reflect the fact that we may want to solve for the photometric scaling of the science image.
 Once can equivalently assume instead that either or both images are already in the desired flux units and $\phi$ is already normalized to integrate to unity; this will generally be true for the template in practice.
 
-We will also use analytic approximations $P_T(x)$ and $P_S(x)$ to the true template and science image PSFs $\phi_T(x)$ and $\phi_S$; these could be (e.g.) Gaussian or double-Gaussian profiles of approximately the same shapes.
-We will derive other requirements on the nature of these approximations as we go.
-
-The Fourier difference image is unchanged if we multiply both the numerator and denominator by $\widetilde{P_T}/\widetilde{\phi_T}$:
-
+The PSF $\phi_D$ of the difference image (proportional) to the Fourier transform of
 \begin{align}
-  \widetilde{z_D}(k) & = \frac{
-    \widetilde{P_T}(k) \, \widetilde{z_S}(k)
-    - \frac{
-        \widetilde{P_T}(k) \, \widetilde{\phi_S}(k)
-      }{
-        \widetilde{\phi_T}(k)
-      }\, \widetilde{z_T}(k)
-  }{
-    \sqrt{
-      \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
-      + \sigma_T^2 \, \frac{
-        \left|\widetilde{\phi_S}(k)\right|^2
-        \left|\widetilde{P_T}(k)\right|^2
-      }{
-        \left|\widetilde{\phi_T}(k)\right|^2
+  \widetilde{\phi_D}(k) &\propto \frac{
+      \widetilde{\phi_T}(k) \, \widetilde{\phi_S}(k)
+    }{
+      \sqrt{
+          \sigma_S^2 \, \left|\widetilde{\phi_T}(k)\right|^2
+          + \sigma_T^2 \, \left|\widetilde{\phi_S}(k)\right|^2
       }
     }
-  }
+  \label{eqn:zogy-psf}
 \end{align}
 
-We will now make two actual approximations to the difference image: we will assume $\phi_T(x) = P_T(x)$ and $\phi_S(x) = P_S(x)$ \emph{in the denominator only:}
+We will also use analytic approximations $P_T(x)$ and $P_S(x)$ to the true template and science image PSFs $\phi_T(x)$ and $\phi_S$; these could be (e.g.) Gaussian or double-Gaussian profiles of approximately the same shapes.\footnote{Providing a rough analytic approximation the PSF is a much lower bar than the high-quality PSF models demanded by \ZOGY{}, even in crowded fields.}
 
+We will explore algorithms that solve
 \begin{align}
-  \widetilde{z_D}(k) & \approx \frac{
-    \widetilde{P_T}(k) \, \widetilde{z_S}(k)
-    - \frac{
-        \widetilde{P_T}(k) \, \widetilde{\phi_S}(k)
-      }{
-        \widetilde{\phi_T}(k)
-      }\, \widetilde{z_T}(k)
+  \underset{\theta}{\text{min}} \sum_x \left(
+        \left[V \ast z_S\right]\!(x) - \left[K(\theta) \ast z_T\right]\!(x)
+      \right)^2
+\end{align}
+where
+\begin{itemize}
+  \item $V$ is an analytic \emph{preconvolution kernel} $V(x)$, derived from $P_T$ and $P_S$.
+  \item $K$ is \emph{difference kernel} with model parameters $\theta$ that we aim to fit.
+\end{itemize}
+
+We will attempt to keep as much of the algorithm as possible in the image domain, to better allow for generalization to spatially-varying PSFs and dealing with missing pixels (neither of which will be dealt with directly).
+
+The original \AL{} algorithm is the limit where $V$ is a delta functions.
+The preconvolved \AL{} algorithm sets $V=\phi_S$.
+
+\section{Algorithm I: implicit decorrelation}
+
+We can identify the ideal $V$ and $K$ (those that match the \ZOGY{} result) as
+\begin{align}
+  \widetilde{V}(k) & = \frac{
+    \widetilde{\phi_T}(k)
   }{
     \sqrt{
-      \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
-      + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
+      \sigma_S^2 \, \left|\widetilde{\phi_T}(k)\right|^2
+      + \sigma_T^2 \, \left|\widetilde{\phi_S}(k)\right|^2
     }
-  }
+  } \label{eqn:a1-preconvolution-kernel-ideal}\\
+  \widetilde{K}(k) & = \frac{
+    \widetilde{\phi_S}(k)
+  }{
+    \sqrt{
+      \sigma_S^2 \, \left|\widetilde{\phi_T}(k)\right|^2
+      + \sigma_T^2 \, \left|\widetilde{\phi_S}(k)\right|^2
+    }
+  } \label{eqn:a1-difference-kernel-ideal}
 \end{align}
-
-This approximation does not affect the quality of the subtraction, as it amounts to [de]convolving the optimal difference image by a small kernel, hence leaving the noise slightly correlated.
-
-We now identify the two Fourier products for the two images as distinct kernels, and consider the subtraction in the image-domain:
+In practice, we would need to replace $\phi \rightarrow P$ in $V$, since it must be comprised only of our approximations:
 \begin{align}
-  \widetilde{z_D}(k) & \approx \widetilde{V}(k) \, \widetilde{z_S}(k)
-    - \widetilde{K}(k) \, \widetilde{z_T}(k) \\
-  \widetilde{V}(k) & \equiv \frac{
+  \widetilde{V}(k) & = \frac{
     \widetilde{P_T}(k)
   }{
     \sqrt{
       \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
       + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
     }
-  } \label{eqn:preconvolution-kernel} \\
+  } \label{eqn:a1-preconvolution-kernel-actual}
+\end{align}
+which means the $K$ we actually fit for should instead converge to
+\begin{align}
   \widetilde{K}(k) & \equiv \frac{
       \widetilde{P_T}(k) \, \widetilde{\phi_S}(k)
   }{
@@ -164,21 +179,9 @@ We now identify the two Fourier products for the two images as distinct kernels,
       \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
       + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
     }
-  } \\
-  z_D(x) & \approx \left[V \ast z_S\right](x) - \left[K \ast z_T\right](x)
+  } \label{eqn:a1-difference-kernel-actual}
 \end{align}
-$V$ is a preconvolution kernel, comprised entirely of analytic approximations that we consider inputs to the algorithm.\footnote{Providing a rough analytic approximation the PSF is a much lower bar than the high-quality PSF models demanded by \ZOGY{}, even in crowded fields.}
-$K$ is a difference kernel that we can now solve for via least squares, just as in \AL{}, by introducing some model for $K$ with parameters $\theta$:
-\begin{align}
-  \underset{\theta}{\text{min}} \sum_x \left(
-      \left[V \ast z_S\right](x) - \left[K(\theta) \ast z_T\right](x)
-    \right)^2
-  \label{eqn:least-squares}
-\end{align}
-
-When the approximate PSFs are good, the residual image has nearly uncorrelated noise and hence we can consider each \emph{residual} pixel an independent data point in our optimization.
-
-The PSF of the resulting difference image is proportional to the Fourier transform of:
+and the PSF of the resulting difference image is proportional to the Fourier transform of:
 \begin{align}
   \widetilde{\phi_D}(k) &= \frac{
       \widetilde{P_T}(k) \, \widetilde{\phi_S}(k)
@@ -187,19 +190,81 @@ The PSF of the resulting difference image is proportional to the Fourier transfo
           \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
           + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
       }
-    }\label{eqn:target-psf}
+    }\label{eqn:a1:target-psf}
 \end{align}
+
+When the approximate PSFs are good, the residual image has nearly uncorrelated noise and hence we can consider each residual pixel an independent data point in our optimization.
 
 When the template has no noise at all, $V(x) \rightarrow \delta(x)$ regardless of our choices for the approximate PSFs, and this algorithm reduces to \AL{}, as expected.
 But this reveals a flaw: as in \AL{}, the difference kernel $K$ we fit for is a net deconvolution when the science image is sharper than the template.
-In fact, in the general case, when there is noise in both images and the PSFs are not the same, one of $V$ or $K$ is \emph{always} a net deconvolution, because the target PSF [\ref{eqn:target-psf}] that we convolve both sides to is an average\footnote{It isn't a standard average -- it's got elements of both RMS and geometric means to it, in the Fourier domain -- but it is indeed an average.} of the science and template PSFs, and hence it is always sharper than one of them.
+In fact, in the general case, when there is noise in both images and the PSFs are not the same, one of $V$ or $K$ is \emph{always} a net deconvolution, because the target PSF [\ref{eqn:a1:target-psf}] that we convolve both sides to is an average\footnote{It isn't a standard average -- it has elements of both RMS and geometric means to it, in the Fourier domain -- but it is indeed an average.} of the science and template PSFs, and hence it is always sharper than one of them.
 
-This may not be a problem in practice when the template image is sharper, because this makes $K$ a net convolution and $V$ a net deconvolution, and $V$ can be defined to be analytic and hence a completely reversible deconvolution.
-It probably is a problem when the science image is sharper, because this makes $K$ a net deconvolution; $K$ is something we fit from the data, and is hence noisy in general.
-Deconvolution is less of a convolution than in the vanilla \AL{} method, because $V$ is a net convolution and this reduces the amount of deconvolution required of $K$.
+This should not be a problem in practice when the template image is sharper, because this makes $K$ a net convolution and $V$ a net deconvolution, and $V$ can be defined to be analytic and hence a completely reversible deconvolution.
+It probably is a problem when the science image is sharper, because this makes $K$ a net deconvolution; $K$ is something we fit from the data, and is hence noisy in general, and fitting a deconvolution kernel is generally difficult.
+But $K$ is less of a convolution than its counterpart in the vanilla \AL{} method under these conditions, because $V$ is a net convolution and this reduces the amount of deconvolution required of $K$.
 In addition, the residual image that we optimize should be much closer to uncorrelated than the one used in vanilla \AL{}, which may improve convergence and reduce biases in the fit for $K$.
 So, given that \AL{} methods have been shown to work when only a small deconvolution is required, this algorithm may still be worth a try, because it does mitigate the deconvolution problem, even if it does not solve it.
 
+This algorithm also reveals that there is no ``free lunch'': to get the \ZOGY{} result, or something close to it, or even just obtain the score image while treating the noise in the fit rigorously, you \emph{have} to deconvolve something derived from at least one of the images.
+
+\section{Algorithm II: decorrelating basis functions}
+
+Much of the problem with asking our parameterized difference kernel $K$ to deconvolve is that it is hard to represent such a convolution in the image domain.
+If $z[j]$ is a well-sampled image ($j \in \mathbb{Z}^2$), then it can be reconstructed exactly via sinc interpolation:
+\begin{align}
+  z(x) & = \sum_j z[j] \, \sinc(x - j)
+\end{align}
+and its continuous convolution with a kernel $K$ with arbitrarily high-frequency power is
+\begin{align}
+  \left[K \ast z\right](x) &= \sum_j z[j] \, \int_{-\frac{1}{2}}^{\frac{1}{2}} \, dk \,
+    e^{2\pi i \, k \cdot (x - j)} \, \widetilde{K}(k) \\
+      &= \sum_j z[j] \, W(x -j) \\
+  W(x) &\equiv \int_{-\frac{1}{2}}^{\frac{1}{2}} \, dk \,
+    e^{2\pi i \, k \cdot x} \, \widetilde{K}(k)
+\end{align}
+In other words, we can compute $K \ast z$ in the image domain exactly, as a discrete convolution, if we first apply a low-pass filter to $K$.
+There is a big caveat, however: this result makes no guarantees about the compactness of $W(x)$ in the image domain, and formally it actually has infinite extent (just like $\sinc$)
+Whether it is can effectively be approximated with a compact image-domain kernel depends on the details of $K$; generally, if the low-pass filter has little or no effect, because $\widetilde{K}(k) \rightarrow 0$ for $|k| > \frac{1}{2}$ (as would be the case for a well-sampled net-convolution kernel), its image-domain representation will be more compact.
+
+We can use this to remove the responsibility for fitting the deconvolution from the parameterization of $K$.
+Using the definition of $V$ from [\ref{eqn:a1-preconvolution-kernel-actual}], we can split the corresponding $K$ definition from [\ref{eqn:a1-difference-kernel-actual}] into two factors:
+\begin{align}
+  \widetilde{K}(k) & = \widetilde{K_1}(k) \, \widetilde{K_2}(k) \\
+  \widetilde{K_1}(k) & \equiv
+  \frac{
+      \widetilde{P_T}(k) \, \widetilde{\phi_S}(k)
+  }{
+    \widetilde{\phi_T}(k) \,
+  } \\
+  \widetilde{K_2}(k) & \equiv \left(
+      \sigma_S^2 \, \left|\widetilde{P_T}(k)\right|^2
+      + \sigma_T^2 \, \left|\widetilde{P_S}(k)\right|^2
+    \right)^{-\frac{1}{2}}
+\end{align}
+$K_1(x)$ here is approximately the science image's PSF -- guaranteed to be not just a net convolution, but well-sampled, too.\footnote{...as long as the data is, too, of course, but if not, all is lost}
+This is what we will parameterize and fit.
+$K_2(x)$ is a deconvolution kernel, but one that is fixed and derived fully from $P_T$ and $P_S$.
+
+This separation is most natural if $K$ is parameterized as an expansion with coefficients $\theta_n$ onto a set of basis functions $A_n(x)$.
+Given an image-domain basis $A_n(x)$ appropriate for fitting well-sampled convolution kernels like $K_1$, we can construct basis functions $B_n(x)$ appropriate for the full $K$ (with the same coefficients) via
+\begin{align}
+  B_n(x) & = \int_{-\frac{1}{2}}^{\frac{1}{2}} \, dk \,
+    e^{2\pi i \, k \cdot x} \, \widetilde{K_2}(k) \, \widetilde{A_n}(k)
+\end{align}
+This can be computed with FFTs if $A_n$ are pixel-based -- essentially arbitrary levels of padding and oversampling are probably feasible, since these operations are being applied just to small basis function images.
+
+The same approach is actually applicable to computing $V$ (a complication we glossed over in the previous section):
+\begin{align}
+  V(x) & = \int_{-\frac{1}{2}}^{\frac{1}{2}} \, dk \,
+  e^{2\pi i \, k \cdot x} \, \widetilde{K_2}(k) \, \widetilde{P_T}(k)
+\end{align}
+
+To summarize, the steps of this algorithm are:
+\begin{enumerate}
+  \item Precompute the image-domain preconvolution kernel $V$ and decorrelating basis functions $B_n$.
+  \item Convolve the science image by $V$ (this may be a deconvolution, but a safe one).
+  \item Apply the \AL{} algorithm to match the template image $z_T$ to the preconvolved science image $V \ast z_S$, using basis functions $B_n$.
+\end{enumerate}
 
 \appendix
 % Include all the relevant bib files.
